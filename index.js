@@ -137,7 +137,7 @@ module.exports = function (options) {
       }
     });
   
-    if (options.fetchUser && !_isNull(req.user) && !_isUndefined(req.user)) {
+    if (options.fetchUser && !_.isNull(req.user) && !_.isUndefined(req.user)) {
       req.user.fetch().then(function(user) {
         next();
       }, function() {
