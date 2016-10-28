@@ -31,23 +31,23 @@ Cookie.prototype.serialize = function(key, val){
   return serialize(key, val, this);
 }
 
-var setCurrentParseUser = function(userSession){
+var setCurrentParseUser = function(userSession, req){
   if (!userSession || !userSession.id || !userSession.sessionToken) {
     // Force cleanup if invalid
-    Parse.User.logOut();
+    req.user.logOut();
     return;
   }
-  Parse.User._currentUser = Parse.Object._create("_User");
-  Parse.User._currentUser._isCurrentUser = true;
-  Parse.User._currentUser.id = userSession.id;
-  Parse.User._currentUser._sessionToken = userSession.sessionToken;
-  Parse.User._currentUser._synchronizeAllAuthData();
-  Parse.User._currentUser._refreshCache();
-  Parse.User._currentUser._opSetQueue = [{}];
+  req.user = Parse.Object._create("_User");
+  req.user._isCurrentUser = true;
+  req.user.id = userSession.id;
+  req.user._sessionToken = userSession.sessionToken;
+  req.user._synchronizeAllAuthData();
+  req.user._refreshCache();
+  req.user._opSetQueue = [{}];
 }
 
-var getCurrentParseUserSession = function(){
-  var u = Parse.User.current();
+var getCurrentParseUserSession = function(req){
+  var u = req.user;
   if (!u) {
     return;
   }
@@ -103,11 +103,11 @@ module.exports = function (options) {
         console.warn("Invalid Parse session cookie");
       }
     }
-    setCurrentParseUser(reqCookieJson);
+    setCurrentParseUser(reqCookieJson, req);
     ////////////////////////
     // Response path logic
     res.on('header', function() {
-      var resParseUserSession = getCurrentParseUserSession();
+      var resParseUserSession = getCurrentParseUserSession(req);
       // If user is logged out, clear cookie.
       if (_.isUndefined(resParseUserSession)) {
         cookie.expires = new Date(0);
@@ -135,12 +135,12 @@ module.exports = function (options) {
       }
     });
   
-    if (options.fetchUser && !_isNullOrUndefined(Parse.User.current())) {
-      Parse.User.current().fetch().then(function(user) {
+    if (options.fetchUser && !_isNullOrUndefined(req.user)) {
+      req.user.fetch().then(function(user) {
         next();
       }, function() {
         // If user from cookie is invalid, reset Parse.User.current() to null.
-        Parse.User.logOut();
+        req.user.logOut();
         next();
       });
     } else {
