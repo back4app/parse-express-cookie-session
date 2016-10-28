@@ -34,7 +34,9 @@ Cookie.prototype.serialize = function(key, val){
 var setCurrentParseUser = function(userSession, req){
   if (!userSession || !userSession.id || !userSession.sessionToken) {
     // Force cleanup if invalid
-    req.user.logOut();
+    if (req.user) {
+      req.user.logOut();
+    }
     return;
   }
   req.user = Parse.Object._create("_User");
