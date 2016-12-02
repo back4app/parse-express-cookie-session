@@ -1,152 +1,90 @@
-
-
-var _ = require("underscore");
-var Cookie = function(options){
-  this.path = "/";
-  this.maxAge = null;
-  this.httpOnly = true;
-  //if (options) _.merge(this, options);
-}
-
-var encode = encodeURIComponent;
-var decode = decodeURIComponent;
-
-
-Cookie.prototype.serialize = function(key, val){
-
-  var serialize = function(name, val, opt){
-    opt = opt || {};
-    var enc = opt.encode || encode;
-    var pairs = [name + '=' + enc(val)];
-
-    if (opt.maxAge) pairs.push('Max-Age=' + opt.maxAge);
-    if (opt.domain) pairs.push('Domain=' + opt.domain);
-    if (opt.path) pairs.push('Path=' + opt.path);
-    if (opt.expires) pairs.push('Expires=' + opt.expires.toUTCString());
-    if (opt.httpOnly) pairs.push('HttpOnly');
-    if (opt.secure) pairs.push('Secure');
-
-    return pairs.join('; ');
-};
-  return serialize(key, val, this);
-}
-
-var setCurrentParseUser = function(userSession, req){
-  if (!userSession || !userSession.id || !userSession.sessionToken) {
-    // Force cleanup if invalid
-    if (req.user) {
-      req.user.logOut();
-    }
-    return;
-  }
-  req.user = Parse.Object._create("_User");
-  req.user._isCurrentUser = true;
-  req.user.id = userSession.id;
-  req.user._sessionToken = userSession.sessionToken;
-  req.user._synchronizeAllAuthData();
-  req.user._refreshCache();
-  req.user._opSetQueue = [{}];
-}
-
-var getCurrentParseUserSession = function(req){
-  var u = req.user;
-  if (!u) {
-    return;
-  }
-  return {id:u.id, sessionToken: u.getSessionToken()};
-}
-
+const _ = require("underscore");
 
 module.exports = function (options) {
   options = options || {};
   var key = options.key || 'parse.sess';
   var cookieOptions = options.cookie || {};
-  var forcedCookieOptions = { httpOnly: true, secure: true };
-  // forcedCookieOptions will overwrite same keys in cookieOptions
-  cookieOptions = _.defaults(forcedCookieOptions, cookieOptions);
+  var forcedCookieOptions = {httpOnly: true, secure: true};
+  // forcedCookieOptions will overwrite same keys in cookieOptions.
+  cookieOptions = _.extend({path: '/', maxAge: null, httpOnly: true},
+    _.defaults(forcedCookieOptions, cookieOptions));
 
   return function parseExpressCookieSession(req, res, next) {
+    // Add login method to req
+    req.logIn = function (username, password) {
+      return Parse.User.logIn(username, password)
+        .then(function (user) {
+          res.cookie(key, JSON.stringify({id: user.id, sessionToken: user.getSessionToken()}));
+          return user;
+        }, function (err) {
+          return err;
+        })
+    };
 
-    ////////////////////////
-    // Request path logic
+    req.logOut = function () {
+      // TODO remove user session? Parse.User.logOut();
+      res.cookie(key, '', {maxAge: 0});
+    };
 
-    // Expect express.cookieParser to set req.secret before this middleware.
-    var signatureSecret = req.secret;
-    if (_.isEmpty(signatureSecret)) {
-      throw new Error('express.cookieParser middleware must be included' +
-        'before this, and initialized with a signing secret');
+    // Expect cookieParser to set req.secret before this middleware.
+    if (_.isEmpty(req.secret)) {
+      throw new Error('cookieParser middleware must be included before this one and initialized with a signing secret');
     }
-    var cookie = new Cookie(cookieOptions);
 
-    // Ignore if cookie path does not match.
-    if (req.originalUrl.indexOf(cookie.path) !== 0) {
+    // Ignore if cookie path does not match
+    if (req.originalUrl.indexOf(cookieOptions.path) !== 0) {
       return next();
     }
 
-    // Decrypt and parse the signed cookie.
-    // Assume express.cookieParser already verified the signature and put the
+    // Parse the signed cookie.
+    // Assume cookieParser already verified the signature and put the
     // cookie's contents at req.signedCookies[key].
-    var reqParseUserSession;
-    var reqCookieJson;  // Used later to determine whether to set response cookie.
+    var reqCookieJson;
     var reqCookieBody = req.cookies[key];
     if (!_.isEmpty(reqCookieBody)) {
       try {
-
         reqCookieJson = JSON.parse(reqCookieBody);
-        //reqParseUserSession = JSON.parse(reqCookieBody);//decrypt(reqCookieBody, encryptionSecret);
         if (reqCookieJson && !reqCookieJson.id || !reqCookieJson.sessionToken) {
-          throw "Invalid session";
+          throw new Error("Invalid session");
         }
-        /*if (!Parse._.isEmpty(reqCookieJson)) {
-          reqParseUserSession = utils.parseJSONCookie(reqCookieJson);
-        }*/
       } catch (e) {
-        // Catch any decryption and JSON parsing exceptions.
-        console.warn("Invalid Parse session cookie");
+        // Catch any JSON parsing exceptions.
+        console.warn("Invalid Parse session cookie: ", e);
       }
     }
-    setCurrentParseUser(reqCookieJson, req);
-    ////////////////////////
-    // Response path logic
-    res.on('header', function() {
-      var resParseUserSession = getCurrentParseUserSession(req);
-      // If user is logged out, clear cookie.
-      if (_.isUndefined(resParseUserSession)) {
-        cookie.expires = new Date(0);
-        res.setHeader('Set-Cookie', cookie.serialize(key, ''));
-        return;
-      }
 
-      // Only send Parse session cookies via https connection.
-      /*if (!req.secure) {
-        console.warn('Skipped setting Parse session cookie because request is not https');
-        return;
-      }*/
+    // getSessionToken hack to be overridden in user
+    var _getSessionToken = function () {
+      return reqCookieJson.sessionToken;
+    };
 
-      // Serialize. Prefix is Connect's convention for JSON in cookie.
-      resCookieJson = resParseUserSession;
-      // Skip Set-Cookie if cookie is same as request.
-      if (reqCookieJson !== resCookieJson) {
-        var val = JSON.stringify(resParseUserSession);
-        val = cookie.serialize(key, val);
-        res.setHeader('Set-Cookie', val);
-        // Encrypt and sign. Prefix is Connect's convention for signed cookie.
-        //var val = encrypt(resCookieJson, encryptionSecret);
-        //val = 's:' + signature.sign(val, signatureSecret);
-        
-      }
-    });
-  
-    if (options.fetchUser && !_.isNull(req.user) && !_.isUndefined(req.user)) {
-      req.user.fetch().then(function(user) {
-        next();
-      }, function() {
-        // If user from cookie is invalid, reset Parse.User.current() to null.
-        req.user.logOut();
-        next();
-      });
+    var user = null;
+    if (reqCookieJson && reqCookieJson.id && reqCookieJson.sessionToken) {
+      // Create new user
+      user = new Parse.User({id: reqCookieJson.id});
+      // Override getSessionToken
+      user.getSessionToken = _getSessionToken;
+    }
+
+    req.user = user;
+
+    if (options.fetchUser && user !== null) {
+      user.fetch()
+        .then(
+          function (user) {
+            req.user = user;
+            // Override getSessionToken
+            user.getSessionToken = _getSessionToken;
+            next();
+          },
+          function (err) {
+            // If user from cookie is invalid, reset user to null.
+            req.user = null;
+            next();
+          }
+        );
     } else {
       next();
     }
   };
-}
+};
