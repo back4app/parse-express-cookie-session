@@ -1,5 +1,33 @@
 const _ = require("underscore");
 
+/**
+ * This will forcefully set the sessionToken in the user object.
+ * Will try more reliable ways first, falling back to simply
+ * replacing the getSessionToken function in the User object.
+ */
+function setSessionToken(user, sessionToken) {
+    if (typeof user._finishFetch === 'function') {
+        user._finishFetch({sessionToken: sessionToken});
+    }
+    if (user.getSessionToken() == sessionToken) {
+        return;
+    }
+
+    var oldGet = user.get;
+    user.get = function (attr) {
+        if (attr == 'sessionToken') {
+            return sessionToken;
+        }
+        oldGet.apply(this, arguments);
+    }
+    if (user.getSessionToken() != sessionToken) {
+        user.get = oldGet;
+        user.getSessionToken = function () {
+            return sessionToken;
+        }
+    }
+}
+
 module.exports = function (options) {
   options = options || {};
   var key = options.key || 'parse.sess';
@@ -53,28 +81,22 @@ module.exports = function (options) {
       }
     }
 
-    // getSessionToken hack to be overridden in user
-    var _getSessionToken = function () {
-      return reqCookieJson.sessionToken;
-    };
-
     var user = null;
     if (reqCookieJson && reqCookieJson.id && reqCookieJson.sessionToken) {
       // Create new user
       user = new Parse.User({id: reqCookieJson.id});
-      // Override getSessionToken
-      user.getSessionToken = _getSessionToken;
+      setSessionToken(user, reqCookieJson.sessionToken);
     }
-
     req.user = user;
 
     if (options.fetchUser && user !== null) {
       user.fetch()
         .then(
           function (user) {
-            req.user = user;
-            // Override getSessionToken
-            user.getSessionToken = _getSessionToken;
+            if (user != req.user) {
+              req.user = user;
+              setSessionToken(user, reqCookieJson.sessionToken);
+            }
             next();
           },
           function (err) {
