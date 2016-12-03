@@ -1,5 +1,7 @@
 const _ = require("underscore");
 
+const _defaultUserGet = Parse.User.prototype.get;
+
 /**
  * This will forcefully set the sessionToken in the user object.
  * Will try more reliable ways first, falling back to simply
@@ -13,15 +15,14 @@ function setSessionToken(user, sessionToken) {
         return;
     }
 
-    var oldGet = user.get;
     user.get = function (attr) {
         if (attr == 'sessionToken') {
             return sessionToken;
         }
-        oldGet.apply(this, arguments);
+        _defaultUserGet.apply(this, arguments);
     }
     if (user.getSessionToken() != sessionToken) {
-        user.get = oldGet;
+        user.get = _defaultUserGet;
         user.getSessionToken = function () {
             return sessionToken;
         }
