@@ -8,51 +8,47 @@ const _defaultUserGet = Parse.User.prototype.get;
  * replacing the getSessionToken function in the User object.
  */
 function setSessionToken(user, sessionToken) {
-    if (typeof user._finishFetch === 'function') {
-        user._finishFetch({sessionToken: sessionToken});
-    }
-    if (user.getSessionToken() == sessionToken) {
-        return;
-    }
+  if (typeof user._finishFetch === 'function') {
+    user._finishFetch({sessionToken: sessionToken});
+  }
+  if (user.getSessionToken() == sessionToken) {
+    return;
+  }
 
-    user.get = function (attr) {
-        if (attr == 'sessionToken') {
-            return sessionToken;
-        }
-        _defaultUserGet.apply(this, arguments);
+  user.get = function (attr) {
+    if (attr == 'sessionToken') {
+      return sessionToken;
     }
-    if (user.getSessionToken() != sessionToken) {
-        user.get = _defaultUserGet;
-        user.getSessionToken = function () {
-            return sessionToken;
-        }
+    _defaultUserGet.apply(this, arguments);
+  };
+  if (user.getSessionToken() != sessionToken) {
+    user.get = _defaultUserGet;
+    user.getSessionToken = function () {
+      return sessionToken;
     }
+  }
 }
 
 module.exports = function (options) {
   options = options || {};
   var key = options.key || 'parse.sess';
   var cookieOptions = options.cookie || {};
-  var forcedCookieOptions = {httpOnly: true, secure: true};
+  var forcedCookieOptions = {httpOnly: true, secure: true, signed: true};
   // forcedCookieOptions will overwrite same keys in cookieOptions.
   cookieOptions = _.extend({path: '/', maxAge: null, httpOnly: true},
     _.defaults(forcedCookieOptions, cookieOptions));
 
   return function parseExpressCookieSession(req, res, next) {
     // Add login method to req
-    req.logIn = function (username, password) {
-      return Parse.User.logIn(username, password)
+    req.logIn = function () {
+      return Parse.User.logIn.apply(Parse.User, arguments)
         .then(function (user) {
-          res.cookie(key, JSON.stringify({id: user.id, sessionToken: user.getSessionToken()}));
-          return user;
+          req.user = user;
+          res.cookie(key, JSON.stringify({id: user.id, sessionToken: user.getSessionToken()}), cookieOptions);
+          return Parse.Promise.as(user);
         }, function (err) {
-          return err;
-        })
-    };
-
-    req.logOut = function () {
-      // TODO remove user session? Parse.User.logOut();
-      res.cookie(key, '', {maxAge: 0});
+          return Parse.Promise.error(err);
+        });
     };
 
     // Expect cookieParser to set req.secret before this middleware.
@@ -69,7 +65,7 @@ module.exports = function (options) {
     // Assume cookieParser already verified the signature and put the
     // cookie's contents at req.signedCookies[key].
     var reqCookieJson;
-    var reqCookieBody = req.cookies[key];
+    var reqCookieBody = req.signedCookies[key];
     if (!_.isEmpty(reqCookieBody)) {
       try {
         reqCookieJson = JSON.parse(reqCookieBody);
@@ -78,7 +74,7 @@ module.exports = function (options) {
         }
       } catch (e) {
         // Catch any JSON parsing exceptions.
-        console.warn("Invalid Parse session cookie: ", e);
+        // console.warn("Invalid Parse session cookie: ", e);
       }
     }
 
@@ -89,6 +85,28 @@ module.exports = function (options) {
       setSessionToken(user, reqCookieJson.sessionToken);
     }
     req.user = user;
+
+    req.logOut = function () {
+      return Parse.Cloud.httpRequest({
+        method: 'POST',
+        url: Parse.serverURL + '/logout',
+        body: {},
+        headers: {
+          'X-Parse-Application-Id': Parse.applicationId,
+          'X-Parse-Javascript-Key': Parse.javaScriptKey,
+          'X-Parse-Session-Token': reqCookieJson.sessionToken
+        }
+      })
+        .then(
+          function (httpResponse) {
+            req.user = null;
+            res.cookie(key, '', {maxAge: 0});
+            return Parse.Promise.as(httpResponse);
+          },
+          function (httpResponse) {
+            return Parse.Promise.error(httpResponse);
+          });
+    };
 
     if (options.fetchUser && user !== null) {
       user.fetch()
