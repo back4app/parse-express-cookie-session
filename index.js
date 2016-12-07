@@ -92,6 +92,9 @@ module.exports = function (options) {
         return;
       }
 
+      req.user = null;
+      res.clearCookie(key);
+
       return Parse.Cloud.httpRequest({
         method: 'POST',
         url: Parse.serverURL + '/logout',
@@ -103,8 +106,6 @@ module.exports = function (options) {
       })
         .then(
           function (httpResponse) {
-            req.user = null;
-            res.clearCookie(key);
             return Parse.Promise.as(httpResponse);
           },
           function (httpResponse) {
