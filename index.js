@@ -8,20 +8,25 @@ const _defaultUserGet = Parse.User.prototype.get;
  * replacing the getSessionToken function in the User object.
  */
 function setSessionToken(user, sessionToken) {
+  // Prevent messing with obj if it's already working
+  if (user.getSessionToken() === sessionToken) return;
+
   if (typeof user._finishFetch === 'function') {
     user._finishFetch({sessionToken: sessionToken});
   }
-  if (user.getSessionToken() == sessionToken) {
+
+  if (user.getSessionToken() === sessionToken) {
     return;
   }
 
   user.get = function (attr) {
-    if (attr == 'sessionToken') {
+    if (attr === 'sessionToken') {
       return sessionToken;
     }
     _defaultUserGet.apply(this, arguments);
   };
-  if (user.getSessionToken() != sessionToken) {
+
+  if (user.getSessionToken() !== sessionToken) {
     user.get = _defaultUserGet;
     user.getSessionToken = function () {
       return sessionToken;
@@ -39,6 +44,16 @@ module.exports = function (options) {
     _.defaults(forcedCookieOptions, cookieOptions));
 
   return function parseExpressCookieSession(req, res, next) {
+    // Expect cookieParser to set req.secret before this middleware.
+    if (_.isEmpty(req.secret)) {
+      throw new Error('cookieParser middleware must be included before this one and initialized with a signing secret');
+    }
+
+    // Ignore if cookie path does not match
+    if (req.originalUrl.indexOf(cookieOptions.path) !== 0) {
+      return next();
+    }
+
     // Add login method to req
     req.logIn = function () {
       return Parse.User.logIn.apply(Parse.User, arguments)
@@ -51,16 +66,6 @@ module.exports = function (options) {
         });
     };
 
-    // Expect cookieParser to set req.secret before this middleware.
-    if (_.isEmpty(req.secret)) {
-      throw new Error('cookieParser middleware must be included before this one and initialized with a signing secret');
-    }
-
-    // Ignore if cookie path does not match
-    if (req.originalUrl.indexOf(cookieOptions.path) !== 0) {
-      return next();
-    }
-
     // Parse the signed cookie.
     // Assume cookieParser already verified the signature and put the
     // cookie's contents at req.signedCookies[key].
@@ -69,12 +74,8 @@ module.exports = function (options) {
     if (!_.isEmpty(reqCookieBody)) {
       try {
         reqCookieJson = JSON.parse(reqCookieBody);
-        if (reqCookieJson && !reqCookieJson.id || !reqCookieJson.sessionToken) {
-          throw new Error("Invalid session");
-        }
       } catch (e) {
         // Catch any JSON parsing exceptions.
-        // console.warn("Invalid Parse session cookie: ", e);
       }
     }
 
@@ -87,20 +88,23 @@ module.exports = function (options) {
     req.user = user;
 
     req.logOut = function () {
+      if (user === null) {
+        return;
+      }
+
       return Parse.Cloud.httpRequest({
         method: 'POST',
         url: Parse.serverURL + '/logout',
-        body: {},
         headers: {
           'X-Parse-Application-Id': Parse.applicationId,
           'X-Parse-Javascript-Key': Parse.javaScriptKey,
-          'X-Parse-Session-Token': reqCookieJson.sessionToken
+          'X-Parse-Session-Token': user.getSessionToken()
         }
       })
         .then(
           function (httpResponse) {
             req.user = null;
-            res.cookie(key, '', {maxAge: 0});
+            res.clearCookie(key);
             return Parse.Promise.as(httpResponse);
           },
           function (httpResponse) {
@@ -112,10 +116,8 @@ module.exports = function (options) {
       user.fetch()
         .then(
           function (user) {
-            if (user != req.user) {
-              req.user = user;
-              setSessionToken(user, reqCookieJson.sessionToken);
-            }
+            req.user = user;
+            setSessionToken(user, reqCookieJson.sessionToken);
             next();
           },
           function (err) {
