@@ -41,7 +41,7 @@ module.exports = function (options) {
   var forcedCookieOptions = {httpOnly: true, secure: true, signed: true};
   // forcedCookieOptions will overwrite same keys in cookieOptions.
   cookieOptions = _.extend({path: '/', maxAge: null, httpOnly: true},
-    _.defaults(forcedCookieOptions, cookieOptions));
+    _.defaults(cookieOptions, forcedCookieOptions));
 
   return function parseExpressCookieSession(req, res, next) {
     // Expect cookieParser to set req.secret before this middleware.
